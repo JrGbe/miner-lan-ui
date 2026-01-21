@@ -3,7 +3,7 @@ manifestVersion: 1
 id: jrgn-umbrel-comm-app-store-miner-lan-ui
 category: developer
 name: Miner LAN UI
-version: "1.0.2"
+version: "1.0.3"
 tagline: LAN-only HTTP mini browser with bookmarks
 description: >-
   Open LAN HTTP pages from inside Umbrel (LAN-only, HTTP-only) with bookmarks.
