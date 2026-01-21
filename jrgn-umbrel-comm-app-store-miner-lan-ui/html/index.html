@@ -1,1 +1,340 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LAN Browser</title>
+  <style>
+    :root { color-scheme: dark light; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+    header { padding: 14px 16px; border-bottom: 1px solid #ddd; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    input, button { font-size: 15px; }
+    #url { flex: 1; min-width: 280px; padding: 10px 12px; }
+    button { padding: 10px 12px; cursor: pointer; }
+    main { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 62px); }
+    aside { border-right: 1px solid #ddd; padding: 12px; overflow:auto; }
+    .row { display:flex; gap:8px; }
+    .muted { color:#666; font-size: 13px; line-height: 1.35; }
+    .error { color:#b00020; }
+    .ok { color:#1b7f2a; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 10px; margin-top: 10px; }
+    .bm { display:flex; gap:8px; align-items:center; justify-content:space-between; padding: 8px; border-radius: 10px; }
+    .bm:hover { background: rgba(0,0,0,0.05); }
+    .bm button { padding: 6px 8px; font-size: 13px; }
+    #frameWrap { padding: 12px; }
+    iframe { width: 100%; height: calc(100vh - 86px); border: 1px solid #ddd; border-radius: 14px; }
+    .tiny { font-size: 12px; color:#666; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>LAN Browser</strong>
+    <input id="url" placeholder="192.168.1.50:8080 or http://printer.local" />
+    <button id="openHere">Open here</button>
+    <button id="openTab">Open new tab</button>
+  </header>
+
+  <main>
+    <aside>
+      <div class="card">
+        <div style="font-weight:600;">Bookmarks</div>
+        <div class="muted">Saved in this browser (localStorage).</div>
+
+        <div style="margin-top:10px;">
+          <input id="bmName" placeholder="Name (e.g. Router)" style="width:100%; padding:10px 12px;" />
+          <div style="height:8px;"></div>
+          <div class="row">
+            <button id="saveBm" style="flex:1;">Save current</button>
+            <button id="exportBm">Export</button>
+            <button id="importBm">Import</button>
+          </div>
+          <div style="height:8px;"></div>
+          <input id="bmSearch" placeholder="Search bookmarks..." style="width:100%; padding:10px 12px;" />
+        </div>
+      </div>
+
+      <div id="bmList" class="card"></div>
+
+      <div class="card">
+        <div style="font-weight:600;">Rules</div>
+        <div class="muted">
+          ✅ LAN-only: RFC1918 IPv4 (10/8, 172.16–31/12, 192.168/16), 169.254/16, 127/8, and *.local<br>
+          ✅ HTTP-only: https:// is blocked
+        </div>
+      </div>
+
+      <div id="msg" class="card muted"></div>
+    </aside>
+
+    <div id="frameWrap">
+      <iframe
+        id="frame"
+        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation-by-user-activation"
+      ></iframe>
+      <div class="tiny" style="margin-top:8px;">
+        If the embedded view is blank, the target likely blocks iframes or your browser blocked HTTP-in-HTTPS (mixed content). Use “Open new tab”.
+      </div>
+    </div>
+  </main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+
+  const urlEl = $("url");
+  const frame = $("frame");
+  const msg = $("msg");
+
+  const bmName = $("bmName");
+  const bmList = $("bmList");
+  const bmSearch = $("bmSearch");
+
+  const STORAGE_KEY = "lan_browser_bookmarks_v1";
+
+  function setMsg(text, kind = "muted") {
+    msg.className = "card " + kind;
+    msg.textContent = text;
+  }
+
+  // --- LAN-only validation helpers ---
+  function isIPv4(host) {
+    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m) return null;
+    const parts = m.slice(1).map(Number);
+    if (parts.some(n => n < 0 || n > 255)) return null;
+    return parts;
+  }
+
+  function isLanHost(host) {
+    const h = host.toLowerCase();
+
+    // mDNS
+    if (h.endsWith(".local")) return true;
+
+    const ip = isIPv4(h);
+    if (!ip) return false;
+
+    const [a, b] = ip;
+
+    // loopback 127.0.0.0/8
+    if (a === 127) return true;
+
+    // 10.0.0.0/8
+    if (a === 10) return true;
+
+    // 172.16.0.0 - 172.31.255.255
+    if (a === 172 && b >= 16 && b <= 31) return true;
+
+    // 192.168.0.0/16
+    if (a === 192 && b === 168) return true;
+
+    // link-local 169.254.0.0/16
+    if (a === 169 && b === 254) return true;
+
+    return false;
+  }
+
+  function normalizeHttpOnly(input) {
+    let raw = (input || "").trim();
+    if (!raw) return "";
+
+    // Block https explicitly
+    if (/^https:\/\//i.test(raw)) {
+      throw new Error("HTTPS is disabled for this app. Use HTTP only.");
+    }
+
+    // If scheme missing, assume http://
+    if (!/^https?:\/\//i.test(raw)) raw = "http://" + raw;
+
+    const u = new URL(raw);
+
+    if (u.protocol.toLowerCase() !== "http:") {
+      throw new Error("Only http:// URLs are allowed.");
+    }
+
+    if (!isLanHost(u.hostname)) {
+      throw new Error("Blocked: only LAN IPs (.local or private IPv4 ranges) are allowed.");
+    }
+
+    return u.toString();
+  }
+
+  function openHere() {
+    try {
+      const u = normalizeHttpOnly(urlEl.value);
+      if (!u) return;
+
+      frame.src = u;
+      setMsg("Loaded in embedded view. If it stays blank, use “Open new tab”.", "ok");
+    } catch (e) {
+      setMsg(e.message || String(e), "error");
+    }
+  }
+
+  function openTab() {
+    try {
+      const u = normalizeHttpOnly(urlEl.value);
+      if (!u) return;
+
+      window.open(u, "_blank", "noopener,noreferrer");
+      setMsg("Opened in a new tab.", "ok");
+    } catch (e) {
+      setMsg(e.message || String(e), "error");
+    }
+  }
+
+  // --- Bookmarks ---
+  function loadBookmarks() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveBookmarks(arr) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+  }
+
+  function renderBookmarks() {
+    const q = (bmSearch.value || "").trim().toLowerCase();
+    const bms = loadBookmarks()
+      .filter(b => !q || (b.name || "").toLowerCase().includes(q) || (b.url || "").toLowerCase().includes(q));
+
+    bmList.innerHTML = `
+      <div style="font-weight:600; margin-bottom:6px;">Saved (${bms.length})</div>
+      ${bms.length ? "" : `<div class="muted">No bookmarks yet. Open a LAN URL, then click “Save current”.</div>`}
+    `;
+
+    for (const bm of bms) {
+      const row = document.createElement("div");
+      row.className = "bm";
+      row.innerHTML = `
+        <div style="min-width:0;">
+          <div style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(bm.name || "(unnamed)")}</div>
+          <div class="tiny" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(bm.url)}</div>
+        </div>
+        <div class="row">
+          <button data-act="open">Open</button>
+          <button data-act="rename">Rename</button>
+          <button data-act="del">Delete</button>
+        </div>
+      `;
+
+      row.querySelector('[data-act="open"]').onclick = () => {
+        urlEl.value = bm.url;
+        openHere();
+      };
+
+      row.querySelector('[data-act="rename"]').onclick = () => {
+        const name = prompt("New name:", bm.name || "");
+        if (name == null) return;
+        const all = loadBookmarks();
+        const idx = all.findIndex(x => x.id === bm.id);
+        if (idx >= 0) {
+          all[idx].name = name.trim() || "(unnamed)";
+          saveBookmarks(all);
+          renderBookmarks();
+        }
+      };
+
+      row.querySelector('[data-act="del"]').onclick = () => {
+        const all = loadBookmarks().filter(x => x.id !== bm.id);
+        saveBookmarks(all);
+        renderBookmarks();
+      };
+
+      bmList.appendChild(row);
+    }
+  }
+
+  function addBookmark() {
+    try {
+      const u = normalizeHttpOnly(urlEl.value);
+      if (!u) return;
+
+      const name = (bmName.value || "").trim() || prompt("Bookmark name:", "") || "(unnamed)";
+      const all = loadBookmarks();
+
+      // de-dup by URL
+      const existing = all.find(b => b.url === u);
+      if (existing) {
+        existing.name = name;
+      } else {
+        all.unshift({ id: crypto.randomUUID(), name, url: u });
+      }
+
+      saveBookmarks(all);
+      bmName.value = "";
+      renderBookmarks();
+      setMsg("Bookmark saved.", "ok");
+    } catch (e) {
+      setMsg(e.message || String(e), "error");
+    }
+  }
+
+  function exportBookmarks() {
+    const data = JSON.stringify(loadBookmarks(), null, 2);
+    navigator.clipboard.writeText(data).then(() => {
+      setMsg("Bookmarks copied to clipboard (JSON).", "ok");
+    }).catch(() => {
+      // fallback: prompt
+      prompt("Copy your bookmarks JSON:", data);
+    });
+  }
+
+  function importBookmarks() {
+    const raw = prompt("Paste bookmarks JSON:");
+    if (!raw) return;
+    try {
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) throw new Error("Invalid JSON (expected an array).");
+
+      // basic validation + keep only LAN/http
+      const cleaned = [];
+      for (const x of arr) {
+        if (!x || typeof x !== "object") continue;
+        const url = String(x.url || "");
+        const name = String(x.name || "(unnamed)");
+        try {
+          const normalized = normalizeHttpOnly(url);
+          cleaned.push({ id: x.id || crypto.randomUUID(), name, url: normalized });
+        } catch {
+          // skip invalid entries
+        }
+      }
+
+      saveBookmarks(cleaned);
+      renderBookmarks();
+      setMsg("Bookmarks imported.", "ok");
+    } catch (e) {
+      setMsg(e.message || String(e), "error");
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+    }[c]));
+  }
+
+  // wire up UI
+  $("openHere").onclick = openHere;
+  $("openTab").onclick = openTab;
+  $("saveBm").onclick = addBookmark;
+  $("exportBm").onclick = exportBookmarks;
+  $("importBm").onclick = importBookmarks;
+
+  urlEl.addEventListener("keydown", (e) => { if (e.key === "Enter") openHere(); });
+  bmSearch.addEventListener("input", renderBookmarks);
+
+  // initial
+  setMsg("Enter a LAN http:// URL or a private IP. HTTPS and public URLs are blocked.");
+  renderBookmarks();
+})();
+</script>
+</body>
+</html>
 
