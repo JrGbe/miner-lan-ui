@@ -72,7 +72,7 @@
         sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation-by-user-activation"
       ></iframe>
       <div class="tiny" style="margin-top:8px;">
-        If the embedded view is blank, the target likely blocks iframes or your browser blocked HTTP-in-HTTPS (mixed content). Use “Open new tab”.
+        If the embedded view is blank, the target likely blocks iframes. With the /browse proxy, most LAN UIs should load fully (including CSS/JS).
       </div>
     </div>
   </main>
@@ -94,6 +94,12 @@
   function setMsg(text, kind = "muted") {
     msg.className = "card " + kind;
     msg.textContent = text;
+  }
+
+  // base64url encode (so it’s URL-safe)
+  function b64urlEncode(str) {
+    // btoa expects Latin1; URLs are ASCII so OK here
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
   }
 
   // --- LAN-only validation helpers ---
@@ -156,7 +162,18 @@
       throw new Error("Blocked: only LAN IPs (.local or private IPv4 ranges) are allowed.");
     }
 
+    // Friendly warning for common mistake
+    if (u.port === "443") {
+      throw new Error("Port 443 is typically HTTPS, but HTTPS is disabled and this host may not listen on 443. Try without :443 (e.g. http://192.168.x.x).");
+    }
+
     return u.toString();
+  }
+
+  // IMPORTANT: use /browse/<base64url(target)>/ so assets load correctly through the proxy
+  function browseUrl(targetUrl) {
+    const id = b64urlEncode(targetUrl);
+    return `/browse/${id}/`;
   }
 
   function openHere() {
@@ -164,8 +181,8 @@
       const u = normalizeHttpOnly(urlEl.value);
       if (!u) return;
 
-      frame.src = "/proxy?u=" + encodeURIComponent(u);
-      setMsg("Loaded in embedded view. If it stays blank, use “Open new tab”.", "ok");
+      frame.src = browseUrl(u);
+      setMsg("Loaded via /browse proxy. If it stays blank, check the target URL/port.", "ok");
     } catch (e) {
       setMsg(e.message || String(e), "error");
     }
@@ -176,8 +193,8 @@
       const u = normalizeHttpOnly(urlEl.value);
       if (!u) return;
 
-      window.open("/proxy?u=" + encodeURIComponent(u), "_blank", "noopener,noreferrer");
-      setMsg("Opened in a new tab.", "ok");
+      window.open(browseUrl(u), "_blank", "noopener,noreferrer");
+      setMsg("Opened via /browse proxy in a new tab.", "ok");
     } catch (e) {
       setMsg(e.message || String(e), "error");
     }
@@ -280,7 +297,6 @@
     navigator.clipboard.writeText(data).then(() => {
       setMsg("Bookmarks copied to clipboard (JSON).", "ok");
     }).catch(() => {
-      // fallback: prompt
       prompt("Copy your bookmarks JSON:", data);
     });
   }
