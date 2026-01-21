@@ -45,6 +45,7 @@
           <div style="height:8px;"></div>
           <div class="row">
             <button id="saveBm" style="flex:1;">Save current</button>
+            <button id="scanLan">Scan LAN</button>
             <button id="exportBm">Export</button>
             <button id="importBm">Import</button>
           </div>
@@ -335,11 +336,45 @@
       "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
     }[c]));
   }
+async function scanLan() {
+  setMsg("Scanning LAN for miners… (this can take ~10–30s)", "muted");
+  try {
+    const r = await fetch("/scan", { cache: "no-store" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || "Scan failed");
 
+    const found = Array.isArray(data.found) ? data.found : [];
+    if (!found.length) {
+      setMsg(`Scan complete: no miners detected on ${data.interface?.address}/${data.interface?.netmask}.`, "muted");
+      return;
+    }
+
+    // auto-add found miners to bookmarks (dedup by URL)
+    const all = loadBookmarks();
+    for (const m of found) {
+      const url = m.url;
+      const name = `${m.vendor} (${m.ip}${m.port === 80 ? "" : ":" + m.port})`;
+
+      const existing = all.find(b => b.url === url);
+      if (existing) {
+        existing.name = existing.name || name;
+      } else {
+        all.unshift({ id: crypto.randomUUID(), name, url });
+      }
+    }
+    saveBookmarks(all);
+    renderBookmarks();
+
+    setMsg(`Scan complete: added/updated ${found.length} miner(s).`, "ok");
+  } catch (e) {
+    setMsg(e.message || String(e), "error");
+  }
+}
   // wire up UI
   $("openHere").onclick = openHere;
   $("openTab").onclick = openTab;
   $("saveBm").onclick = addBookmark;
+  $("scanLan").onclick = scanLan;
   $("exportBm").onclick = exportBookmarks;
   $("importBm").onclick = importBookmarks;
 
