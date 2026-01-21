@@ -1,4 +1,13 @@
-FROM nginx:alpine
-COPY html/ /usr/share/nginx/html/
+FROM node:20-alpine
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+
+COPY server.js ./
+COPY public ./public
+
+ENV PORT=8080
 EXPOSE 8080
-RUN sed -i 's/listen\s\+80;/listen 8080;/' /etc/nginx/conf.d/default.conf
+
+CMD ["node", "server.js"]
