@@ -164,7 +164,7 @@
       const u = normalizeHttpOnly(urlEl.value);
       if (!u) return;
 
-      frame.src = u;
+      frame.src = "/proxy?u=" + encodeURIComponent(u);
       setMsg("Loaded in embedded view. If it stays blank, use “Open new tab”.", "ok");
     } catch (e) {
       setMsg(e.message || String(e), "error");
@@ -176,7 +176,7 @@
       const u = normalizeHttpOnly(urlEl.value);
       if (!u) return;
 
-      window.open(u, "_blank", "noopener,noreferrer");
+      window.open("/proxy?u=" + encodeURIComponent(u), "_blank", "noopener,noreferrer");
       setMsg("Opened in a new tab.", "ok");
     } catch (e) {
       setMsg(e.message || String(e), "error");
