@@ -1,0 +1,12 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: jrgn-umbrel-comm-app-store-miner-lan-ui_web_1
+      APP_PORT: 8080
+
+  web:
+    image: ghcr.io/jrgbe/miner-lan-ui:1.0.0
+    restart: on-failure
+    stop_grace_period: 1m
